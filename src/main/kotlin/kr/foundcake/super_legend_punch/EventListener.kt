@@ -12,54 +12,129 @@ import org.bukkit.event.EventPriority
 import org.bukkit.event.Listener
 import org.bukkit.event.entity.EntityDamageByEntityEvent
 import org.bukkit.event.inventory.PrepareAnvilEvent
+import org.bukkit.inventory.ItemStack
+import java.util.regex.Pattern
 
-class EventListener: Listener {
+class EventListener : Listener {
 
-    private val blockItemName = Regex("^(((S|SS|SSS)+)+Punch!\\b|S+Punch!)$").toPattern()
+    private val blockedItemName = Regex("^(((S|SS|SSS)+)+Punch!\\b|S+Punch!)$").toPattern()
     private val punchSuffix = "Punch!"
+    private val targetMaterial = Material.ARMADILLO_SCUTE
 
     @EventHandler(priority = EventPriority.HIGHEST)
-    fun onAttack(event: EntityDamageByEntityEvent) {
-        if (
-            event.entity.type === EntityType.PLAYER ||
-            event.damager.type !== EntityType.PLAYER||
-            event.damageSource.damageType !== DamageType.PLAYER_ATTACK
-            ) return
-        val player = event.damager as Player
-        val item = player.inventory.itemInMainHand
-        val itemName = Utils.plainText(item.effectiveName())
-        val count = punchPower(itemName)
-        if(item.type === Material.ARMADILLO_SCUTE && count != null) {
-            event.damage = count * 20.0
-            if(event.isCancelled) {
-                event.isCancelled = false
+    fun onAttack(event: EntityDamageByEntityEvent) = event {
+        +rule { entity.type !== EntityType.PLAYER }
+        +rule { damager.type === EntityType.PLAYER }
+        +rule { damageSource.damageType === DamageType.PLAYER_ATTACK }
+
+        player {
+            hand(targetMaterial) {
+                plainName.legendPunch then { event punch it }
             }
         }
     }
 
     @EventHandler(priority = EventPriority.HIGHEST)
-    fun onPrepareAnvil(event: PrepareAnvilEvent) {
-        if(
-            event.result === null ||
-            event.result!!.type !== Material.ARMADILLO_SCUTE ||
-            event.view.player.gameMode === GameMode.CREATIVE
-        ) return
-        val name = Utils.plainText(event.result!!.effectiveName())
-        if(blockItemName.cachedSafeMatches(name) == true){
-            event.result = null
+    fun onPrepareAnvil(event: PrepareAnvilEvent) = event {
+        +rule { view.player.gameMode !== GameMode.CREATIVE }
+
+        target(targetMaterial) {
+            (plainName cursedBy blockedItemName) then {
+                event.result = null
+            }
         }
     }
 
-    private fun punchPower(itemName: String): Int? {
-        if (!itemName.endsWith(punchSuffix)) return null
+    private inline operator fun EntityDamageByEntityEvent.invoke(
+        script: AttackScript.() -> Unit
+    ) {
+        AttackScript(this).script()
+    }
 
-        val sCount = itemName.length - punchSuffix.length
-        if (sCount <= 0) return null
+    private inline operator fun PrepareAnvilEvent.invoke(
+        script: AnvilScript.() -> Unit
+    ) {
+        AnvilScript(this).script()
+    }
 
-        for (index in 0..<sCount) {
-            if (itemName[index] != 'S') return null
+    private inner class AttackScript(
+        private val event: EntityDamageByEntityEvent
+    ) {
+        private var alive = true
+
+        fun rule(block: EntityDamageByEntityEvent.() -> Boolean): EntityDamageByEntityEvent.() -> Boolean =
+            block
+
+        operator fun (EntityDamageByEntityEvent.() -> Boolean).unaryPlus() {
+            val gate = this
+            alive = alive && gate(event)
         }
 
-        return sCount
+        fun player(block: Player.() -> Unit) {
+            if (alive) {
+                (event.damager as? Player)?.block()
+            }
+        }
     }
+
+    private inner class AnvilScript(
+        private val event: PrepareAnvilEvent
+    ) {
+        private var alive = true
+
+        fun rule(block: PrepareAnvilEvent.() -> Boolean): PrepareAnvilEvent.() -> Boolean =
+            block
+
+        operator fun (PrepareAnvilEvent.() -> Boolean).unaryPlus() {
+            val gate = this
+            alive = alive && gate(event)
+        }
+
+        fun target(material: Material, block: ItemStack.() -> Unit) {
+            if (alive) {
+                event.result
+                    ?.takeIf { it.type === material }
+                    ?.block()
+            }
+        }
+    }
+
+    private infix fun EntityDamageByEntityEvent.punch(power: Int) {
+        damage = power * 20.0
+        takeIf { isCancelled }?.let {
+            isCancelled = false
+        }
+    }
+
+    private inline fun Player.hand(
+        material: Material,
+        block: ItemStack.() -> Unit
+    ) {
+        inventory.itemInMainHand
+            .takeIf { it.type === material }
+            ?.block()
+    }
+
+    private inline infix fun <T> T?.then(block: (T) -> Unit) {
+        this?.let(block)
+    }
+
+    private inline infix fun Boolean?.then(block: () -> Unit) {
+        if (this == true) {
+            block()
+        }
+    }
+
+    private infix fun String.cursedBy(pattern: Pattern): Boolean? =
+        pattern.cachedSafeMatches(this)
+
+    private val ItemStack.plainName: String
+        get() = Utils.plainText(effectiveName())
+
+    private val String.legendPunch: Int?
+        get() = takeIf { endsWith(punchSuffix) }
+            ?.removeSuffix(punchSuffix)
+            ?.takeIf { it.isNotEmpty() }
+            ?.takeIf { it.all { ch -> ch == 'S' } }
+            ?.length
 }

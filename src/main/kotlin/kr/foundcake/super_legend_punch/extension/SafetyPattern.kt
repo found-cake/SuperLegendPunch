@@ -9,6 +9,14 @@ private class MatchStepCounter {
     var value: Long = 0
 }
 
+private inline fun <T> limitRegexSteps(block: () -> T): T? {
+    return try {
+        block()
+    } catch (_: RegexLimitExceededException) {
+        null
+    }
+}
+
 private class GuardedCharSequence(
     private val source: CharSequence,
     private val maxSteps: Long,
@@ -25,13 +33,14 @@ private class GuardedCharSequence(
         return source[index]
     }
 
-    override fun subSequence(startIndex: Int, endIndex: Int): CharSequence {
-        return GuardedCharSequence(
-            source = source.subSequence(startIndex, endIndex),
-            maxSteps = maxSteps,
-            counter = counter
-        )
-    }
+    override fun subSequence(startIndex: Int, endIndex: Int): CharSequence =
+        source.subSequence(startIndex, endIndex).let {
+            GuardedCharSequence(
+                source = it,
+                maxSteps = maxSteps,
+                counter = counter
+            )
+        }
 }
 
 fun Pattern.safeMatches(
@@ -40,11 +49,9 @@ fun Pattern.safeMatches(
 ): Boolean? {
     require(maxSteps > 0) { "maxSteps must be positive" }
 
-    return try {
+    return limitRegexSteps {
         val counter = MatchStepCounter()
         matcher(GuardedCharSequence(input, maxSteps, counter)).matches()
-    } catch (e: RegexLimitExceededException) {
-        null
     }
 }
 
@@ -58,15 +65,37 @@ private data class RegexCacheKey(
     val maxSteps: Long
 )
 
+private data class CachedMatch(
+    val value: Boolean?
+)
+
 private val matchCache = Collections.synchronizedMap(
     object : LinkedHashMap<RegexCacheKey, Boolean?>(MAX_CACHE_SIZE, 0.75f, true) {
         override fun removeEldestEntry(
             eldest: MutableMap.MutableEntry<RegexCacheKey, Boolean?>?
-        ): Boolean {
-            return size > MAX_CACHE_SIZE
-        }
+        ): Boolean = size > MAX_CACHE_SIZE
     }
 )
+
+private inline fun <T> withMatchCache(block: MutableMap<RegexCacheKey, Boolean?>.() -> T): T =
+    synchronized(matchCache) {
+        matchCache.block()
+    }
+
+private fun RegexCacheKey.cachedMatch(): CachedMatch? =
+    withMatchCache {
+        if (containsKey(this@cachedMatch)) {
+            CachedMatch(get(this@cachedMatch))
+        } else {
+            null
+        }
+    }
+
+private fun RegexCacheKey.cacheMatch(result: Boolean?) {
+    withMatchCache {
+        put(this@cacheMatch, result)
+    }
+}
 
 fun Pattern.cachedSafeMatches(
     input: String,
@@ -79,19 +108,13 @@ fun Pattern.cachedSafeMatches(
         maxSteps = maxSteps
     )
 
-    synchronized(matchCache) {
-        if (matchCache.containsKey(key)) {
-            return matchCache[key]
-        }
+    key.cachedMatch()?.let {
+        return it.value
     }
 
-    val result = safeMatches(input, maxSteps)
-
-    if (input.length >= MIN_CACHE_LENGTH) {
-        synchronized(matchCache) {
-            matchCache[key] = result
-        }
+    return safeMatches(input, maxSteps).also { result ->
+        input
+            .takeIf { it.length >= MIN_CACHE_LENGTH }
+            ?.let { key.cacheMatch(result) }
     }
-
-    return result
 }
