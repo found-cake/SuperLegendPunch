@@ -6,6 +6,6 @@ import org.bukkit.plugin.java.JavaPlugin
 class Loader: JavaPlugin() {
 
     override fun onEnable() {
-        Bukkit.getPluginManager().registerEvents(EventListener(), this)
+        this.server.pluginManager.registerEvents(EventListener(), this)
     }
 }
