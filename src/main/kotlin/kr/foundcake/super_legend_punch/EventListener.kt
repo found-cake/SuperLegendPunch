@@ -15,7 +15,8 @@ import org.bukkit.event.inventory.PrepareAnvilEvent
 
 class EventListener: Listener {
 
-    private val blockItemName = Regex("^(S+)+Punch!$").toPattern()
+    private val blockItemName = Regex("^(((S|SS|SSS)+)+Punch!\\b|S+Punch!)$").toPattern()
+    private val punchSuffix = "Punch!"
 
     @EventHandler(priority = EventPriority.HIGHEST)
     fun onAttack(event: EntityDamageByEntityEvent) {
@@ -27,21 +28,9 @@ class EventListener: Listener {
         val player = event.damager as Player
         val item = player.inventory.itemInMainHand
         val itemName = Utils.plainText(item.effectiveName())
-        if(
-            item.type === Material.ARMADILLO_SCUTE &&
-            itemName != "" &&
-            itemName.first() == 'S' &&
-            itemName.endsWith("Punch!")
-            ) {
-            var count = 0
-            for(c in itemName) {
-                if(c == 'S') {
-                    count++
-                } else {
-                    break
-                }
-            }
-            event.damage = count * 10.0
+        val count = punchPower(itemName)
+        if(item.type === Material.ARMADILLO_SCUTE && count != null) {
+            event.damage = count * 20.0
             if(event.isCancelled) {
                 event.isCancelled = false
             }
@@ -52,12 +41,25 @@ class EventListener: Listener {
     fun onPrepareAnvil(event: PrepareAnvilEvent) {
         if(
             event.result === null ||
-            event.view.player.gameMode !== GameMode.CREATIVE ||
-            event.result!!.type !== Material.ARMADILLO_SCUTE
+            event.result!!.type !== Material.ARMADILLO_SCUTE ||
+            event.view.player.gameMode === GameMode.CREATIVE
         ) return
         val name = Utils.plainText(event.result!!.effectiveName())
         if(blockItemName.cachedSafeMatches(name) == true){
             event.result = null
         }
+    }
+
+    private fun punchPower(itemName: String): Int? {
+        if (!itemName.endsWith(punchSuffix)) return null
+
+        val sCount = itemName.length - punchSuffix.length
+        if (sCount <= 0) return null
+
+        for (index in 0..<sCount) {
+            if (itemName[index] != 'S') return null
+        }
+
+        return sCount
     }
 }

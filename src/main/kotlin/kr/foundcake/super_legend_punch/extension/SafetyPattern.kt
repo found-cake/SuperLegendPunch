@@ -1,44 +1,97 @@
 package kr.foundcake.super_legend_punch.extension
 
+import java.util.Collections
 import java.util.regex.Pattern
 
-class RegexTimeoutException : RuntimeException() {
-    override fun fillInStackTrace(): Throwable = this
+class RegexLimitExceededException : RuntimeException(null, null, false, false)
+
+private class MatchStepCounter {
+    var value: Long = 0
 }
 
 private class GuardedCharSequence(
     private val source: CharSequence,
-    private val deadlineNanos: Long
+    private val maxSteps: Long,
+    private val counter: MatchStepCounter = MatchStepCounter()
 ) : CharSequence {
-    override val length: Int get() = source.length
+
+    override val length: Int
+        get() = source.length
+
     override fun get(index: Int): Char {
-        if (System.nanoTime() > deadlineNanos) throw RegexTimeoutException()
+        if (++counter.value > maxSteps) {
+            throw RegexLimitExceededException()
+        }
         return source[index]
     }
-    override fun subSequence(startIndex: Int, endIndex: Int): CharSequence =
-        GuardedCharSequence(source.subSequence(startIndex, endIndex), deadlineNanos)
+
+    override fun subSequence(startIndex: Int, endIndex: Int): CharSequence {
+        return GuardedCharSequence(
+            source = source.subSequence(startIndex, endIndex),
+            maxSteps = maxSteps,
+            counter = counter
+        )
+    }
 }
 
-private const val MAX_CACHE_SIZE = 500
+fun Pattern.safeMatches(
+    input: String,
+    maxSteps: Long = 1_000_000L
+): Boolean? {
+    require(maxSteps > 0) { "maxSteps must be positive" }
 
-private val matchCache = object : LinkedHashMap<String, Boolean?>(MAX_CACHE_SIZE, 0.75f, true) {
-    override fun removeEldestEntry(eldest: Map.Entry<String, Boolean?>?): Boolean =
-        size > MAX_CACHE_SIZE
-}
-
-fun Pattern.safeMatches(input: String, timeoutMs: Long): Boolean? {
-    val deadline = System.nanoTime() + timeoutMs * 1_000_000
     return try {
-        matcher(GuardedCharSequence(input, deadline)).matches()
-    } catch (_: RegexTimeoutException) {
+        val counter = MatchStepCounter()
+        matcher(GuardedCharSequence(input, maxSteps, counter)).matches()
+    } catch (e: RegexLimitExceededException) {
         null
     }
 }
 
-fun Pattern.cachedSafeMatches(input: String, timeoutMs: Long = 15): Boolean? {
-    matchCache[input]?.let { return it }
+private const val MIN_CACHE_LENGTH = 8
+private const val MAX_CACHE_SIZE = 300
 
-    val result = safeMatches(input, timeoutMs)
-    matchCache[input] = result
+private data class RegexCacheKey(
+    val pattern: String,
+    val flags: Int,
+    val input: String,
+    val maxSteps: Long
+)
+
+private val matchCache = Collections.synchronizedMap(
+    object : LinkedHashMap<RegexCacheKey, Boolean?>(MAX_CACHE_SIZE, 0.75f, true) {
+        override fun removeEldestEntry(
+            eldest: MutableMap.MutableEntry<RegexCacheKey, Boolean?>?
+        ): Boolean {
+            return size > MAX_CACHE_SIZE
+        }
+    }
+)
+
+fun Pattern.cachedSafeMatches(
+    input: String,
+    maxSteps: Long = 1_000_000L
+): Boolean? {
+    val key = RegexCacheKey(
+        pattern = pattern(),
+        flags = flags(),
+        input = input,
+        maxSteps = maxSteps
+    )
+
+    synchronized(matchCache) {
+        if (matchCache.containsKey(key)) {
+            return matchCache[key]
+        }
+    }
+
+    val result = safeMatches(input, maxSteps)
+
+    if (input.length >= MIN_CACHE_LENGTH) {
+        synchronized(matchCache) {
+            matchCache[key] = result
+        }
+    }
+
     return result
 }
