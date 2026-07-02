@@ -100,7 +100,7 @@ class EventListener : Listener {
     }
 
     private infix fun EntityDamageByEntityEvent.punch(power: Int) {
-        damage = power * 20.0
+        damage = 500.0 / power
         takeIf { isCancelled }?.let {
             isCancelled = false
         }
