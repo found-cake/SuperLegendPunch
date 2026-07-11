@@ -57,7 +57,7 @@ class EventListener : Listener {
         AnvilScript(this).script()
     }
 
-    private inner class AttackScript(
+    private class AttackScript(
         private val event: EntityDamageByEntityEvent
     ) {
         private var alive = true
@@ -77,7 +77,7 @@ class EventListener : Listener {
         }
     }
 
-    private inner class AnvilScript(
+    private class AnvilScript(
         private val event: PrepareAnvilEvent
     ) {
         private var alive = true
