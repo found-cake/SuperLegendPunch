@@ -24,3 +24,9 @@ java {
 kotlin {
     jvmToolchain(25)
 }
+
+tasks.named<ProcessResources>("processResources") {
+    from("$rootDir/LICENSE") {
+        into("META-INF") // 루트 경로에 포함
+    }
+}
